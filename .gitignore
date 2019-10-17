@@ -1,0 +1,15 @@
+### Example user template
+
+# IntelliJ project files
+.idea
+*.iml
+out
+gen
+*.env
+*.env.production
+
+docker/dev/sharing
+
+infomagazine/settings/local.py
+
+serverless/*/layers/*.zip

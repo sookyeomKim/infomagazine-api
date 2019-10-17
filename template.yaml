@@ -1,0 +1,391 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AWS CloudFormation template to create a new VPC
+  or use an existing VPC for ECS deployment
+  in Create Cluster Wizard. Requires exactly 1
+  Instance Types for a Spot Request.
+Parameters:
+  AppName:
+    Type: String
+    Description: >
+      Specifies the ECS Cluster Name with which the resources would be
+      associated
+    Default: "infomagazine-api-server"
+  ECSAmiId:
+    Type: String
+    Description: Specifies the AMI ID for your container instances.
+    Default: "ami-0accbb5aa909be7bf"
+  ECSInstanceType:
+    Type: CommaDelimitedList
+    Description: >
+      Specifies the EC2 instance type for your container instances.
+      Defaults to m4.large
+    Default: "t3.nano"
+    ConstraintDescription: must be a valid EC2 instance type.
+  KeyName:
+    Type: String
+    Description: >
+      Optional - Specifies the name of an existing Amazon EC2 key pair
+      to enable SSH access to the EC2 instances in your cluster.
+    Default: "lcventures"
+  VpcId:
+    Type: String
+    Description: >
+      Optional - Specifies the ID of an existing VPC in which to launch
+      your container instances. If you specify a VPC ID, you must specify a list of
+      existing subnets in that VPC. If you do not specify a VPC ID, a new VPC is created
+      with atleast 1 subnet.
+    Default: "vpc-36adfa5f"
+    ConstraintDescription: >
+      VPC Id must begin with "vpc-" or leave blank to have a
+      new VPC created
+  SubnetIds:
+    Type: CommaDelimitedList
+    Description: >
+      Optional - Specifies the Comma separated list of existing VPC Subnet
+      Ids where ECS instances will run
+    Default: "subnet-0650dae71b1be9684,subnet-008932ecd65001dce"
+  SecurityGroupId:
+    Type: String
+    Description: >
+      Optional - Specifies the Security Group Id of an existing Security
+      Group. Leave blank to have a new Security Group created
+    Default: "sg-00a6147527f35e023"
+  EbsVolumeSize:
+    Type: Number
+    Description: >
+      Optional - Specifies the Size in GBs, of the newly created Amazon
+      Elastic Block Store (Amazon EBS) volume
+    Default: "30"
+  EbsVolumeType:
+    Type: String
+    Description: Optional - Specifies the Type of (Amazon EBS) volume
+    Default: 'gp2'
+    AllowedValues:
+      - ''
+      - standard
+      - io1
+      - gp2
+      - sc1
+      - st1
+    ConstraintDescription: Must be a valid EC2 volume type.
+  DeviceName:
+    Type: String
+    Description: Optional - Specifies the device mapping for the Volume
+    Default: '/dev/xvdcz'
+Resources:
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${AppName}-cluster"
+  ECSInstanceLc:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref "ECSAmiId"
+      InstanceType: !Select [ 0, !Ref "ECSInstanceType" ]
+      AssociatePublicIpAddress: "true"
+      IamInstanceProfile: !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/ecsInstanceRole"
+      KeyName: !Ref "KeyName"
+      SecurityGroups: !Split [",", !Ref "SecurityGroupId"]
+      BlockDeviceMappings:
+        - DeviceName: !Ref "DeviceName"
+          Ebs:
+            VolumeSize: !Ref "EbsVolumeSize"
+            VolumeType: !Ref "EbsVolumeType"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          echo ECS_CLUSTER=${AppName}-cluster >> /etc/ecs/ecs.config
+          echo ECS_BACKEND_HOST= >> /etc/ecs/ecs.config
+          fallocate -l 1.5G /swapspace
+          chmod 600 /swapspace
+          mkswap /swapspace
+          swapon /swapspace
+  ECSInstanceAsg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref "SubnetIds"
+      LaunchConfigurationName: !Ref "ECSInstanceLc"
+      MinSize: "1"
+      MaxSize: "2"
+      DesiredCapacity: "2"
+      TerminationPolicies:
+        - "OldestInstance"
+      MetricsCollection:
+        - Granularity: "1Minute"
+      Tags:
+        - Key: "Name"
+          Value: !Sub "ECS Instance - ${AWS::StackName}"
+          PropagateAtLaunch: "true"
+        - Key: "Description"
+          Value: "This instance is the part of the Auto Scaling group which was created through ECS Console"
+          PropagateAtLaunch: "true"
+  AsgHighPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    DependsOn: "ECSInstanceAsg"
+    Properties:
+      AdjustmentType: "ChangeInCapacity"
+      AutoScalingGroupName: !Ref "ECSInstanceAsg"
+      PolicyType: "StepScaling"
+      StepAdjustments:
+        - MetricIntervalLowerBound: "0"
+          ScalingAdjustment: "1"
+  AsgLowPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    DependsOn: "ECSInstanceAsg"
+    Properties:
+      AdjustmentType: "ChangeInCapacity"
+      AutoScalingGroupName: !Ref "ECSInstanceAsg"
+      PolicyType: "StepScaling"
+      StepAdjustments:
+        - MetricIntervalUpperBound: "0"
+          ScalingAdjustment: "-1"
+  ECSLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: "ipv4"
+      LoadBalancerAttributes:
+        - Key: "deletion_protection.enabled"
+          Value: "false"
+      Name: !Sub "${AppName}-ALB"
+      SecurityGroups:
+        - "sg-0753a9a7b6264f738"
+      Subnets: !Ref "SubnetIds"
+      Tags:
+        - Key: "workload-type"
+          Value: !Sub "${AppName}-ALB"
+  ECSLoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AppName}-TG"
+      VpcId: "vpc-36adfa5f"
+      Port: "80"
+      Protocol: "HTTP"
+      TargetType: "instance"
+      HealthCheckPath: "/health_check"
+      HealthCheckIntervalSeconds: "30"
+      HealthCheckTimeoutSeconds: "5"
+      HealthyThresholdCount: "2"
+      Matcher:
+        HttpCode: "200"
+      Tags:
+        - Key: "workload-type"
+          Value: !Sub "${AppName}-ALB-TG"
+  ECSLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: "redirect"
+          RedirectConfig:
+            Protocol: "HTTPS"
+            Port: "443"
+            StatusCode: "HTTP_301"
+      LoadBalancerArn: !Ref "ECSLoadBalancer"
+      Port: "80"
+      Protocol: "HTTP"
+    DependsOn:
+      - "ECSLoadBalancer"
+      - "ECSLoadBalancerTargetGroup"
+  ECSLoadBalancerListenerSSL:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: "forward"
+          TargetGroupArn: !Ref "ECSLoadBalancerTargetGroup"
+      LoadBalancerArn: !Ref "ECSLoadBalancer"
+      Port: "443"
+      Protocol: "HTTPS"
+      Certificates:
+        - CertificateArn: "arn:aws:acm:ap-northeast-2:590908818913:certificate/9f7af9f8-aa7b-4f0b-8ed5-ba2e2065c34b"
+      SslPolicy: "ELBSecurityPolicy-2016-08"
+    DependsOn:
+      - "ECSLoadBalancer"
+      - "ECSLoadBalancerTargetGroup"
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ExecutionRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole"
+      Family: !Ref "AppName"
+      ContainerDefinitions:
+        - Name: "WebServer"
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/infomagazine-web-server:v0.22.19"
+          Cpu: "500"
+          Memory: "40"
+          PortMappings:
+            - ContainerPort: "8080"
+              HostPort: "80"
+          Essential: "true"
+          MountPoints:
+            - SourceVolume: "tmp_data"
+              ContainerPath: "/tmp"
+          LogConfiguration:
+            LogDriver: "awslogs"
+            Options:
+              awslogs-group: "/ecs/infomagazine-web-server"
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: "ecs"
+        - Name: "APIServer"
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/infomagazine-api-server:v0.22.19"
+          Cpu: "1500"
+          Memory: "400"
+          MemoryReservation: "300"
+          Essential: "true"
+          MountPoints:
+            - SourceVolume: "tmp_data"
+              ContainerPath: "/tmp"
+          LogConfiguration:
+            LogDriver: "awslogs"
+            Options:
+              awslogs-group: "/ecs/infomagazine-api-server"
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: "ecs"
+          Environment:
+            - Name: "SERVER_TYPE"
+              Value: "prod"
+          Secrets:
+            - Name: "SECRET_KEY"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_SECRET_KEY"
+            - Name: "ALLOWED_HOSTS"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_ALLOWED_HOSTS"
+            - Name: "STATIC_URL"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_STATIC_URL"
+            - Name: "DB_ENGINE"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_DB_ENGINE"
+            - Name: "DB_NAME"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_DB_NAME"
+            - Name: "DB_USER"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_DB_USER"
+            - Name: "DB_PASSWORD"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_DB_PASSWORD"
+            - Name: "DB_HOST"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_DB_HOST"
+            - Name: "DB_PORT"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_DB_PORT"
+            - Name: "MONGO_CLOUD_ACCOUNT"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_MONGO_CLOUD_ACCOUNT"
+            - Name: "MONGO_CLOUD_PASSWD"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_MONGO_CLOUD_PASSWD"
+            - Name: "AWS_ACCESS_KEY_ID"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_AWS_ACCESS_KEY_ID"
+            - Name: "AWS_SECRET_ACCESS_KEY"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_AWS_SECRET_ACCESS_KEY"
+            - Name: "AWS_STORAGE_BUCKET_NAME"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_AWS_STORAGE_BUCKET_NAME"
+            - Name: "CF_DISTRIBUTION_ID"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_CF_DISTRIBUTION_ID"
+            - Name: "CORS_ORIGIN_WHITELIST"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_CORS_ORIGIN_WHITELIST"
+            - Name: "CSRF_TRUSTED_ORIGINS"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_CSRF_TRUSTED_ORIGINS"
+            - Name: "CSRF_COOKIE_DOMAIN"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/INFOMAGAZINE_CSRF_COOKIE_DOMAIN"
+      Volumes:
+        - Name: "tmp_data"
+          DockerVolumeConfiguration:
+            Scope: "shared"
+            Driver: "local"
+            Autoprovision: "true"
+
+  ECSService:
+    Type: AWS::ECS::Service
+    Properties:
+      TaskDefinition: !Ref "ECSTaskDefinition"
+      ServiceName: !Sub "${AppName}-service"
+      Cluster: !Ref "ECSCluster"
+      DesiredCount: "1"
+      HealthCheckGracePeriodSeconds: "10"
+      LaunchType: "EC2"
+      LoadBalancers:
+        - ContainerName: "WebServer"
+          ContainerPort: "8080"
+          TargetGroupArn: !Ref "ECSLoadBalancerTargetGroup"
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS"
+      SchedulingStrategy: "REPLICA"
+      PlacementStrategies:
+        - Field: "attribute:ecs.availability-zone"
+          Type: "spread"
+        - Field: "instanceId"
+          Type: "spread"
+    DependsOn:
+      - "ECSLoadBalancerListener"
+      - "ECSLoadBalancerListenerSSL"
+  ECSServiceAsg:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: "1"
+      MaxCapacity: "2"
+      ResourceId:
+        Fn::Join:
+          - "/"
+          - - "service"
+            - Ref: "ECSCluster"
+            - Fn::GetAtt:
+                - "ECSService"
+                - "Name"
+      RoleARN: !Sub "arn:aws:iam::${AWS::AccountId}:role/ecsAutoscaleRole"
+      ScalableDimension: "ecs:service:DesiredCount"
+      ServiceNamespace: "ecs"
+  ECSServiceHighPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "${AppName}-ESO"
+      PolicyType: "StepScaling"
+      ScalingTargetId: !Ref "ECSServiceAsg"
+      StepScalingPolicyConfiguration:
+        AdjustmentType: "PercentChangeInCapacity"
+        Cooldown: "300"
+        StepAdjustments:
+          - MetricIntervalLowerBound: "0"
+            ScalingAdjustment: "100"
+    DependsOn: "ECSServiceAsg"
+  ECSServiceLowPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "${AppName}-ESI"
+      PolicyType: "StepScaling"
+      ScalingTargetId: !Ref "ECSServiceAsg"
+      StepScalingPolicyConfiguration:
+        AdjustmentType: "PercentChangeInCapacity"
+        Cooldown: "300"
+        StepAdjustments:
+          - MetricIntervalUpperBound: "0"
+            ScalingAdjustment: "-100"
+    DependsOn: "ECSServiceAsg"
+  MemoryHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      MetricName: "MemoryUtilization"
+      Namespace: "AWS/ECS"
+      Statistic: "Average"
+      Period: "60"
+      EvaluationPeriods: "1"
+      Threshold: "70"
+      AlarmActions:
+        - !Ref "AsgHighPolicy"
+        - !Ref "ECSServiceHighPolicy"
+      Dimensions:
+        - Name: "ClusterName"
+          Value: !Ref "AppName"
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+    DependsOn:
+      - "AsgHighPolicy"
+      - "ECSServiceHighPolicy"
+  MemoryLowAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      MetricName: "MemoryUtilization"
+      Namespace: "AWS/ECS"
+      Statistic: "Average"
+      Period: "60"
+      EvaluationPeriods: "1"
+      Threshold: "55"
+      AlarmActions:
+        - !Ref "AsgLowPolicy"
+        - !Ref "ECSServiceLowPolicy"
+      Dimensions:
+        - Name: "ClusterName"
+          Value: !Ref "AppName"
+      ComparisonOperator: "LessThanOrEqualToThreshold"
+    DependsOn:
+      - "AsgLowPolicy"
+      - "ECSServiceLowPolicy"

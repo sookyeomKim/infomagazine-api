@@ -1,0 +1,4 @@
+pymysql
+pyyaml
+ua-parser
+user-agents
