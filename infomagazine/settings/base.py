@@ -57,7 +57,7 @@ INSTALLED_APPS = [
 TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
 
 REST_FRAMEWORK = {
-    # 'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema',  # 3.10.x부터 swagger 이용 시 에러가 발생하여 해당 구문 추가
+    'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema',  # 3.10.x부터 swagger 이용 시 에러가 발생하여 해당 구문 추가
     'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.NamespaceVersioning',
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.DjangoModelPermissions'
@@ -79,7 +79,7 @@ REST_FRAMEWORK = {
 SIMPLE_JWT = {
     # 'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken','rest_framework_simplejwt.tokens.SlidingToken',),
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=6),
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=5),
     'REFRESH_TOKEN_LIFETIME': timedelta(weeks=2),
     # 'SLIDING_TOKEN_LIFETIME': timedelta(hours=6),
     # 'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(hours=6),

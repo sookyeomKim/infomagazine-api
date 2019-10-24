@@ -1,5 +1,5 @@
-from django.middleware import csrf
-from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth import get_user_model
+from django.forms import model_to_dict
 from rest_framework import permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -16,10 +16,33 @@ class UserViewSets(CustomModelViewSet):
     serializer_class = UserSerializer
     filterset_class = UserFilter
 
+    # @action(detail=False, methods=['GET'])
+    # def csrf(self, request):
+    #     csrf.get_token(request)
+    #     return Response(status=status.HTTP_200_OK)
+
     @action(detail=False, methods=['GET'])
-    def csrf(self, request):
-        csrf.get_token(request)
-        return Response(status=status.HTTP_200_OK)
+    def authInfo(self, request):
+        """
+        2019/10/21
+
+        인증된 토큰의 유저 정보를 반환 받는다.
+
+        :param request:
+        :return:
+        """
+        result = {
+            'state': True,
+            'data': {
+                'id': request.user.pk,
+                'email': request.user.email,
+                'username': request.user.username,
+                'access_role': request.user.info.access_role,
+                'is_staff': request.user.is_staff
+            },
+            'message': 'success'
+        }
+        return Response(result, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['POST'])
     def create_client(self, request):
@@ -69,6 +92,8 @@ class UserViewSets(CustomModelViewSet):
             permission_classes = [permissions.IsAuthenticated]
         elif self.action in ['create', 'email_check', 'csrf']:
             permission_classes = [permissions.AllowAny]
+        elif self.action in ['authInfo']:
+            permission_classes = [permissions.IsAuthenticated]
         else:
             permission_classes = [permissions.IsAdminUser]
         return [permission() for permission in permission_classes]
@@ -80,7 +105,7 @@ class UserViewSets(CustomModelViewSet):
             'view': self
         }
 
-        if self.action not in ['list', 'create', 'create_client'] and 'pk' in self.kwargs:
+        if self.action in ['update', 'partial_update'] and 'pk' in self.kwargs:
             context.update({'pk': self.kwargs['pk']})
 
         return context

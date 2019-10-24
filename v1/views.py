@@ -3,6 +3,8 @@ from datetime import datetime
 from django.utils.translation import ugettext_lazy as _
 from django.conf import settings
 from django.middleware import csrf
+from rest_framework import views
+from rest_framework.decorators import action
 from rest_framework.exceptions import NotAuthenticated
 from rest_framework.response import Response
 
@@ -12,7 +14,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenViewBase
 
 
-def extract_token_from_cookie(request):
+def _extract_token_from_cookie(request):
     token = request.COOKIES.get('refresh')
     if not token:
         raise NotAuthenticated(detail=_('Refresh cookie not set. Try to authenticate first.'))
@@ -22,6 +24,7 @@ def extract_token_from_cookie(request):
 
 
 class _TokenCookieViewMixin(TokenViewBase):
+
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
 
@@ -96,7 +99,7 @@ class CustomTokenRefreshView(_TokenCookieViewMixin):
     serializer_class = TokenRefreshSerializer
 
     def post(self, request, *args, **kwargs):
-        request = extract_token_from_cookie(request)
+        request = _extract_token_from_cookie(request)
         return super().post(request, *args, **kwargs)
 
     def get_refresh_token_expiration(self):
@@ -105,3 +108,23 @@ class CustomTokenRefreshView(_TokenCookieViewMixin):
 
 
 custom_token_refresh = CustomTokenRefreshView.as_view()
+
+
+class TokenCookieDeleteView(views.APIView):
+    """
+    Deletes httpOnly auth cookies.
+    Used as logout view while using AUTH_COOKIE
+    """
+    authentication_classes = ()
+    permission_classes = ()
+
+    def post(self, request):
+        response = Response({})
+
+        response.delete_cookie('access')
+        response.delete_cookie('refresh')
+
+        return response
+
+
+custom_token_delete = TokenCookieDeleteView.as_view()

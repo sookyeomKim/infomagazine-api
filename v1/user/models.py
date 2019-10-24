@@ -8,6 +8,8 @@ from django_enumfield import enum
 from v1.organization.models import Organization
 
 
+# TODO 수정하자!!
+# https://docs.djangoproject.com/en/2.2/topics/auth/customizing/
 class User(AbstractUser):
     class Meta:
         db_table = 'user'
@@ -33,6 +35,7 @@ class AccessRole(enum.Enum):
 
 
 # TODO 슈퍼 유저 생성 시 one to one 자동 생성되도록
+# TODO null=True 없애라
 class UserInfo(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='info')
     access_role = enum.EnumField(AccessRole, default=AccessRole.GUEST)
